@@ -335,7 +335,7 @@ function findTopLevelSeparator(input) {
       escaped = false;
       continue;
     }
-    if (char === "\\") {
+    if (char === "\\" && shellBackslashEscapes(text, index, quote)) {
       escaped = true;
       continue;
     }
@@ -385,6 +385,7 @@ function splitShellWords(input) {
   let current = "";
   let quote = "";
   let escaped = false;
+  const text = String(input);
 
   function push() {
     if (current) {
@@ -393,13 +394,14 @@ function splitShellWords(input) {
     }
   }
 
-  for (const char of String(input)) {
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
     if (escaped) {
       current += char;
       escaped = false;
       continue;
     }
-    if (char === "\\") {
+    if (char === "\\" && shellBackslashEscapes(text, index, quote)) {
       escaped = true;
       continue;
     }
@@ -437,6 +439,17 @@ function splitShellWords(input) {
     }
     return token.includes("|") ? token.split(/(\|)/).filter(Boolean) : [token];
   });
+}
+
+function shellBackslashEscapes(text, index, quote) {
+  const next = text[index + 1];
+  if (!next || quote === "'") {
+    return false;
+  }
+  if (quote === "\"") {
+    return ["$", "`", "\"", "\\", "\n"].includes(next);
+  }
+  return /[\s"'\\;&|()<>$`]/.test(next);
 }
 
 function stripLeadingWrappers(command) {

@@ -129,6 +129,10 @@ test("ghostty sent events file is written with 0600 permissions", () => {
       sentAt: "2026-06-22T01:02:03.000Z"
     });
 
+    if (process.platform === "win32") {
+      assert.equal(fs.existsSync(filePath), true);
+      return;
+    }
     assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
   });
 });

@@ -251,6 +251,9 @@ export function sourceFingerprint(root = defaultProjectRoot) {
 }
 
 export function listWorkspaceKeeperProcesses() {
+  if (process.platform === "win32") {
+    return [];
+  }
   try {
     const output = execFileSync("ps", ["-axo", "pid=,lstart=,command="], {
       encoding: "utf8",

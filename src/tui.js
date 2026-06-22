@@ -2363,7 +2363,7 @@ export function capabilityListMetaLabels(capability = {}, project = null) {
 
 export function capabilityRankExplanation(capability = {}, project = null, sentSummary = null) {
   const signal = sentSummary || { count: 0, lastSentAt: null };
-  const cwd = capabilityExecutionCwd(project, capability) || "unknown";
+  const cwd = displayPathLabel(capabilityExecutionCwd(project, capability)) || "unknown";
   return [
     `run:${capabilityRunLabel(capability)}`,
     `source:${capabilitySourcePriorityLabel(capability)}`,
@@ -2748,10 +2748,15 @@ function hasRouterTargetSignal(value) {
 
 function shortTag(value) {
   return String(value || "")
+    .replace(/\\/g, "/")
     .toLowerCase()
     .replace(/[^a-z0-9._/-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
+}
+
+function displayPathLabel(value) {
+  return String(value || "").replace(/\\/g, "/");
 }
 
 function activityAgeLabel(project, now = new Date()) {
