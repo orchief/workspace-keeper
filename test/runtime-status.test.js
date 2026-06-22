@@ -58,7 +58,7 @@ test("runtime data freshness labels include plan, scan, sent, and other process 
 
   const status = buildRuntimeStatus(snapshot, {
     now: "2026-06-22T02:00:00.000Z",
-    currentCodeMtimeMs: Date.parse("2026-06-22T01:00:00.000Z"),
+    currentCodeMtimeMs: Date.parse("2026-06-22T23:00:00.000Z"),
     psOutput,
     plan: {
       generatedAt: "2026-06-22T01:50:00.000Z",
