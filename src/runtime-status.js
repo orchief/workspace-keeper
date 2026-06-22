@@ -6,6 +6,20 @@ import { projectRoot as defaultProjectRoot } from "./paths.js";
 const CODE_STALE_GRACE_MS = 1000;
 const SOURCE_DIRS = ["bin", "src", "web"];
 const SOURCE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".json", ".html", ".css"]);
+const PS_MONTHS = new Map([
+  ["Jan", 0],
+  ["Feb", 1],
+  ["Mar", 2],
+  ["Apr", 3],
+  ["May", 4],
+  ["Jun", 5],
+  ["Jul", 6],
+  ["Aug", 7],
+  ["Sep", 8],
+  ["Oct", 9],
+  ["Nov", 10],
+  ["Dec", 11]
+]);
 
 export function createRuntimeSnapshot({
   root = "",
@@ -261,7 +275,7 @@ function parseProcessLine(line = "") {
     return null;
   }
 
-  const startedAtMs = Date.parse(startedText);
+  const startedAtMs = parsePsLstart(startedText);
   return {
     pid: Number(pidText),
     mode,
@@ -277,21 +291,66 @@ function workspaceKeeperMode(command = "") {
   if (value.includes("\\012") || value.includes("\\n")) {
     return "";
   }
-  if (/\bworkspace-keeper-ghostty-tui\b/.test(value)) {
+  if (/(^|[\s/\\])workspace-keeper-ghostty-tui(?:$|\s)/.test(value)) {
     return "tui";
   }
-  if (/\bworkspace-keeper(?:\.js)?\s+tui\b/.test(value)) {
-    return "tui";
-  }
-  if (/\bworkspace-keeper(?:\.js)?\s+serve\b/.test(value)) {
-    return "serve";
-  }
-  return "";
+  const launch = value.match(/(^|[\s/\\])workspace-keeper(?:\.js)?["']?\s+(tui|serve)\b/);
+  return launch?.[2] || "";
 }
 
 function processPort(command = "") {
   const match = String(command).match(/(?:--port(?:=|\s+)|-p\s+)(\d+)/);
   return match ? Number(match[1]) : null;
+}
+
+function parsePsLstart(value = "") {
+  const match = String(value).trim().match(/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/);
+  if (!match) {
+    return NaN;
+  }
+
+  const [, monthText, dayText, hourText, minuteText, secondText, yearText] = match;
+  const month = PS_MONTHS.get(monthText);
+  const year = Number(yearText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  if (!Number.isInteger(month) || !validDateParts({ year, day, hour, minute, second })) {
+    return NaN;
+  }
+
+  const date = new Date(year, month, day, hour, minute, second);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month ||
+    date.getDate() !== day ||
+    date.getHours() !== hour ||
+    date.getMinutes() !== minute ||
+    date.getSeconds() !== second
+  ) {
+    return NaN;
+  }
+  return date.getTime();
+}
+
+function validDateParts({ year, day, hour, minute, second }) {
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(day) &&
+    Number.isInteger(hour) &&
+    Number.isInteger(minute) &&
+    Number.isInteger(second) &&
+    year >= 1970 &&
+    day >= 1 &&
+    day <= 31 &&
+    hour >= 0 &&
+    hour <= 23 &&
+    minute >= 0 &&
+    minute <= 59 &&
+    second >= 0 &&
+    second <= 59
+  );
 }
 
 function sentEventsLabel({ count = 0, lastSentAt = null, fileMtimeMs = 0, now = new Date() } = {}) {
