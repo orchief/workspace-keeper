@@ -1,0 +1,21 @@
+.DS_Store
+.playwright-mcp/
+node_modules/
+coverage/
+*.log
+*.tgz
+
+# Local generated data and runtime state.
+data/
+
+# Local environment and credentials.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.kubeconfig

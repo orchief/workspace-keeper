@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workspace Keeper</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">WK</div>
+          <div>
+            <h1>Workspace Keeper</h1>
+            <p id="rootPath">Loading workspace...</p>
+          </div>
+        </div>
+
+        <nav class="filters" id="filters"></nav>
+
+        <div class="side-block">
+          <span class="label">Last scan</span>
+          <strong id="lastScan">--</strong>
+        </div>
+
+        <div class="side-block">
+          <span class="label">Runtime</span>
+          <strong id="runtimeStatus">--</strong>
+          <code id="dataFreshness">--</code>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local archive control</p>
+            <h2>Projects</h2>
+          </div>
+          <div class="actions">
+            <input id="search" type="search" placeholder="Search projects" />
+            <button id="rescan" type="button">Rescan</button>
+          </div>
+        </header>
+
+        <section class="metrics" id="metrics"></section>
+
+        <section class="content-grid">
+          <div class="project-table-wrap">
+            <table class="project-table">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Status</th>
+                  <th>Capabilities</th>
+                  <th>Risk</th>
+                  <th>Size</th>
+                  <th>Generated</th>
+                  <th>Git</th>
+                  <th>Local risk</th>
+                  <th>Modified</th>
+                </tr>
+              </thead>
+              <tbody id="projectRows"></tbody>
+            </table>
+          </div>
+
+          <aside class="inspector" id="inspector">
+            <div class="empty-state">
+              <h3>Select a project</h3>
+              <p>Inspect blockers, generated folders, and safe CLI commands.</p>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

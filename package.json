@@ -1,0 +1,48 @@
+{
+  "name": "workspace-keeper",
+  "version": "0.1.0",
+  "description": "Cross-platform TUI for discovering, ranking, and launching project commands from manifests, shell history, and SSH history.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orchief/workspace-keeper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/orchief/workspace-keeper/issues"
+  },
+  "homepage": "https://github.com/orchief/workspace-keeper#readme",
+  "bin": {
+    "workspace-keeper": "./bin/workspace-keeper.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "src/",
+    "CONTRIBUTING.md",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "tui",
+    "cli",
+    "workspace",
+    "terminal",
+    "ghostty",
+    "ssh",
+    "automation"
+  ],
+  "scripts": {
+    "tui": "node ./bin/workspace-keeper.js tui",
+    "ghostty:check": "bin/workspace-keeper-ghostty-tui --check",
+    "scan": "node ./bin/workspace-keeper.js scan",
+    "plan": "node ./bin/workspace-keeper.js plan",
+    "report": "node ./bin/workspace-keeper.js report",
+    "serve": "node ./bin/workspace-keeper.js serve",
+    "test": "node ./scripts/check-js.js && node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

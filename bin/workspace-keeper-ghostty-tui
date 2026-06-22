@@ -1,0 +1,399 @@
+#!/usr/bin/env zsh
+
+SCRIPT_PATH="${0:A}"
+PROJECT_DIR="${WORKSPACE_KEEPER_PROJECT_DIR:-${SCRIPT_PATH:h:h}}"
+DEFAULT_NODE_BIN="$(command -v node 2>/dev/null || true)"
+NODE_BIN="${WORKSPACE_KEEPER_NODE_BIN:-$DEFAULT_NODE_BIN}"
+TUI_SCRIPT="${WORKSPACE_KEEPER_TUI_SCRIPT:-./bin/workspace-keeper.js}"
+WORKSPACE_ROOT="${WORKSPACE_KEEPER_WORKSPACE_ROOT:-${HOME:-}/workspaces}"
+DEFAULT_DATA_BASE="${XDG_DATA_HOME:-${HOME:-}/.local/share}"
+DEFAULT_DATA_DIR="${WORKSPACE_KEEPER_DATA_DIR:-$DEFAULT_DATA_BASE/workspace-keeper}"
+WRAPPER_PATH="$PROJECT_DIR/bin/workspace-keeper-ghostty-tui"
+WRAPPER_ENTRY_ARG="--workspace-keeper-wrapper-entry"
+WRAPPER_MODE="run"
+
+case "${1:-}" in
+  --check|--workspace-keeper-wrapper-check|--workspace-keeper-wrapper-dry-run)
+    WRAPPER_MODE="check"
+    ;;
+  "")
+    ;;
+  *)
+    WRAPPER_MODE="invalid"
+    ;;
+esac
+
+if [[ "$WRAPPER_MODE" == "check" && -n "${WORKSPACE_KEEPER_GHOSTTY_WRAPPER_DATA_DIR:-}" ]]; then
+  DATA_DIR="$WORKSPACE_KEEPER_GHOSTTY_WRAPPER_DATA_DIR"
+else
+  DATA_DIR="$DEFAULT_DATA_DIR"
+fi
+
+LOG_FILE="$DATA_DIR/ghostty-tui.log"
+LOCK_FILE="$DATA_DIR/ghostty-tui.wrapper.lock"
+ENTRY_ID="workspace-keeper-ghostty-tui:v1:${PROJECT_DIR}:${TUI_SCRIPT}:${WORKSPACE_ROOT}"
+LOCK_HELD=0
+
+timestamp() {
+  date -u "+%Y-%m-%dT%H:%M:%SZ"
+}
+
+init_logging() {
+  umask 077
+  if ! mkdir -p "$DATA_DIR" 2>/dev/null; then
+    print -u2 -- "workspace-keeper ghostty wrapper: failed to create data dir"
+    exit 1
+  fi
+  chmod 700 "$DATA_DIR" 2>/dev/null || true
+
+  if ! : >> "$LOG_FILE" 2>/dev/null; then
+    print -u2 -- "workspace-keeper ghostty wrapper: failed to open log file"
+    exit 1
+  fi
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
+}
+
+log_event() {
+  print -r -- "$(timestamp) $*" >> "$LOG_FILE"
+  chmod 600 "$LOG_FILE" 2>/dev/null || true
+}
+
+fail_logged() {
+  local exit_code="$1"
+  shift
+  log_event "level=error $*"
+  print -u2 -- "workspace-keeper ghostty wrapper: $*"
+  exit "$exit_code"
+}
+
+lock_value() {
+  local key="$1"
+  awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' "$LOCK_FILE" 2>/dev/null
+}
+
+pid_is_numeric() {
+  [[ "$1" == <-> ]]
+}
+
+pid_exists() {
+  ps -p "$1" >/dev/null 2>&1
+}
+
+process_command() {
+  ps -ww -p "$1" -o command= 2>/dev/null | sed -n '1p'
+}
+
+process_start_epoch() {
+  local pid="$1"
+  local started_at
+
+  started_at="$(ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//')"
+  if [[ -z "$started_at" ]]; then
+    return 1
+  fi
+
+  date -j -f "%a %b %d %T %Y" "$started_at" "+%s" 2>/dev/null || \
+    date -d "$started_at" "+%s" 2>/dev/null
+}
+
+source_mtime_epoch() {
+  local latest=0
+  local value
+  local file
+
+  for file in "$PROJECT_DIR/package.json" "$PROJECT_DIR/bin/workspace-keeper.js" "$PROJECT_DIR/bin/workspace-keeper-ghostty-tui" "$PROJECT_DIR"/src/*.js; do
+    [[ -e "$file" ]] || continue
+    value="$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null)"
+    if [[ "$value" == <-> && "$value" -gt "$latest" ]]; then
+      latest="$value"
+    fi
+  done
+
+  print -r -- "$latest"
+}
+
+legacy_process_is_stale() {
+  local pid="$1"
+  local started_epoch
+  local source_epoch
+
+  started_epoch="$(process_start_epoch "$pid")" || return 1
+  source_epoch="$(source_mtime_epoch)"
+  if [[ "$started_epoch" == <-> && "$source_epoch" == <-> && "$source_epoch" -gt "$started_epoch" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+is_expected_same_origin_process() {
+  local command_line="$1"
+
+  if [[ "$command_line" == *"workspace-keeper-ghostty-tui"* ]]; then
+    return 0
+  fi
+
+  if [[ "$command_line" == *"$NODE_BIN"* && "$command_line" == *"workspace-keeper.js"* && "$command_line" == *" tui"* && "$command_line" == *"$WRAPPER_ENTRY_ARG"* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+find_legacy_same_origin_process() {
+  ps -axww -o pid=,ppid=,command= | awk \
+    -v node="$NODE_BIN" \
+    -v script="$TUI_SCRIPT" \
+    -v root="$WORKSPACE_ROOT" \
+    -v out="$DATA_DIR" \
+    -v wrapper="$WRAPPER_PATH" \
+    -v entry_arg="$WRAPPER_ENTRY_ARG" '
+      function command_from_line(line) {
+        sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+/, "", line);
+        return line;
+      }
+      function has_flag_value(command, flag, value, needle) {
+        needle = " " flag " " value;
+        if (length(command) < length(needle)) {
+          return 0;
+        }
+        return index(command, needle " ") || substr(command, length(command) - length(needle) + 1) == needle;
+      }
+      {
+        pid = $1;
+        ppid = $2;
+        command[pid] = command_from_line($0);
+        parent[pid] = ppid;
+      }
+      END {
+        for (pid in command) {
+          child_command = command[pid];
+          parent_pid = parent[pid];
+          parent_command = command[parent_pid];
+
+          if (index(child_command, node " ") != 1) {
+            continue;
+          }
+          if (index(child_command, " " script " tui ") == 0) {
+            continue;
+          }
+          if (!has_flag_value(child_command, "--root", root)) {
+            continue;
+          }
+          if (!has_flag_value(child_command, "--out", out)) {
+            continue;
+          }
+          if (index(child_command, entry_arg) != 0) {
+            continue;
+          }
+          if (parent_command == "") {
+            continue;
+          }
+          if (index(parent_command, "/usr/bin/login") == 0) {
+            continue;
+          }
+          if (index(parent_command, wrapper) == 0) {
+            continue;
+          }
+
+          print "legacy_pid=" pid " parent_pid=" parent_pid;
+          exit;
+        }
+      }
+    '
+}
+
+exit_if_legacy_same_origin_active() {
+  local legacy_match
+  local legacy_pid
+
+  legacy_match="$(find_legacy_same_origin_process)"
+  if [[ -z "$legacy_match" ]]; then
+    return 0
+  fi
+
+  legacy_pid="${legacy_match#legacy_pid=}"
+  legacy_pid="${legacy_pid%% *}"
+  if legacy_process_is_stale "$legacy_pid"; then
+    log_event "event=legacy_same_origin_stale $legacy_match source_mtime=$(source_mtime_epoch) action=allow_new"
+    return 0
+  fi
+
+  log_event "event=legacy_same_origin_active $legacy_match action=exit"
+  exit 0
+}
+
+write_lock_file() {
+  local target="$1"
+  local mode="exec"
+  [[ "$WRAPPER_MODE" == "check" ]] && mode="check"
+
+  {
+    print -r -- "version=1"
+    print -r -- "pid=$$"
+    print -r -- "entry_id=$ENTRY_ID"
+    print -r -- "created_at=$(timestamp)"
+    print -r -- "project_dir=$PROJECT_DIR"
+    print -r -- "node=$NODE_BIN"
+    print -r -- "script=$TUI_SCRIPT"
+    print -r -- "workspace_root=$WORKSPACE_ROOT"
+    print -r -- "mode=$mode"
+  } > "$target"
+  chmod 600 "$target" 2>/dev/null || true
+}
+
+clear_stale_lock() {
+  local stale_pid="$1"
+  local created_at="$2"
+
+  log_event "event=lock_stale_cleared stale_pid=$stale_pid created_at=${created_at:-unknown} lock=$LOCK_FILE"
+  if ! rm -f "$LOCK_FILE" 2>/dev/null; then
+    fail_logged 1 "event=lock_stale_clear_failed stale_pid=$stale_pid lock=$LOCK_FILE"
+  fi
+}
+
+handle_existing_lock() {
+  local lock_pid
+  local lock_entry_id
+  local created_at
+  local command_line
+
+  lock_pid="$(lock_value pid)"
+  lock_entry_id="$(lock_value entry_id)"
+  created_at="$(lock_value created_at)"
+
+  if [[ -z "$lock_pid" ]] || ! pid_is_numeric "$lock_pid"; then
+    fail_logged 1 "event=lock_invalid reason=missing_or_invalid_pid lock=$LOCK_FILE"
+  fi
+
+  if ! pid_exists "$lock_pid"; then
+    clear_stale_lock "$lock_pid" "$created_at"
+    return 0
+  fi
+
+  if [[ "$lock_entry_id" != "$ENTRY_ID" ]]; then
+    fail_logged 1 "event=lock_active_unexpected pid=$lock_pid reason=entry_id_mismatch lock=$LOCK_FILE"
+  fi
+
+  command_line="$(process_command "$lock_pid")"
+  if ! is_expected_same_origin_process "$command_line"; then
+    fail_logged 1 "event=lock_active_unexpected pid=$lock_pid reason=process_command_mismatch lock=$LOCK_FILE"
+  fi
+
+  log_event "event=lock_active_same_origin pid=$lock_pid created_at=${created_at:-unknown} action=exit"
+  exit 0
+}
+
+acquire_lock() {
+  local attempt=1
+  local temp_lock
+
+  while (( attempt <= 3 )); do
+    if [[ ! -e "$LOCK_FILE" ]]; then
+      exit_if_legacy_same_origin_active
+    fi
+
+    temp_lock="${LOCK_FILE}.$$.$attempt.tmp"
+    if ! write_lock_file "$temp_lock"; then
+      rm -f "$temp_lock" 2>/dev/null || true
+      fail_logged 1 "event=lock_temp_write_failed lock=$LOCK_FILE"
+    fi
+
+    if ln "$temp_lock" "$LOCK_FILE" 2>/dev/null; then
+      rm -f "$temp_lock" 2>/dev/null || true
+      chmod 600 "$LOCK_FILE" 2>/dev/null || true
+      LOCK_HELD=1
+      log_event "event=lock_acquired pid=$$ lock=$LOCK_FILE"
+      return 0
+    fi
+
+    rm -f "$temp_lock" 2>/dev/null || true
+    handle_existing_lock
+    attempt=$((attempt + 1))
+  done
+
+  fail_logged 1 "event=lock_acquire_retry_exhausted lock=$LOCK_FILE"
+}
+
+release_lock() {
+  local lock_pid
+  local lock_entry_id
+
+  [[ "$LOCK_HELD" == "1" ]] || return 0
+
+  lock_pid="$(lock_value pid)"
+  lock_entry_id="$(lock_value entry_id)"
+  if [[ "$lock_pid" == "$$" && "$lock_entry_id" == "$ENTRY_ID" ]]; then
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+    log_event "event=lock_released pid=$$ lock=$LOCK_FILE"
+  else
+    log_event "event=lock_release_skipped pid=$$ reason=not_owner lock=$LOCK_FILE"
+  fi
+  LOCK_HELD=0
+}
+
+self_check() {
+  if [[ "$WRAPPER_MODE" == "invalid" ]]; then
+    fail_logged 2 "event=invalid_wrapper_args"
+  fi
+
+  if ! cd "$PROJECT_DIR" 2>/dev/null; then
+    fail_logged 1 "event=cwd_failed path=$PROJECT_DIR"
+  fi
+  log_event "event=cwd_ok path=$PROJECT_DIR"
+
+  if [[ ! -e "$NODE_BIN" ]]; then
+    fail_logged 1 "event=node_missing path=$NODE_BIN"
+  fi
+  if [[ ! -x "$NODE_BIN" ]]; then
+    fail_logged 1 "event=node_not_executable path=$NODE_BIN"
+  fi
+  log_event "event=node_ok path=$NODE_BIN"
+
+  if [[ ! -f "$TUI_SCRIPT" ]]; then
+    fail_logged 1 "event=tui_cli_missing path=$PROJECT_DIR/$TUI_SCRIPT"
+  fi
+  if [[ ! -r "$TUI_SCRIPT" ]]; then
+    fail_logged 1 "event=tui_cli_not_readable path=$PROJECT_DIR/$TUI_SCRIPT"
+  fi
+  log_event "event=tui_cli_ok path=$PROJECT_DIR/$TUI_SCRIPT"
+}
+
+run_check_mode() {
+  local hold_seconds="${WORKSPACE_KEEPER_GHOSTTY_WRAPPER_CHECK_HOLD_SECONDS:-0}"
+
+  trap 'release_lock' EXIT INT TERM
+  log_event "event=check_mode_ok action=skip_tui"
+
+  if [[ "$hold_seconds" == <-> && "$hold_seconds" -gt 0 ]]; then
+    log_event "event=check_mode_hold seconds=$hold_seconds"
+    sleep "$hold_seconds"
+  elif [[ -n "$hold_seconds" && "$hold_seconds" != "0" ]]; then
+    log_event "event=check_mode_hold_ignored reason=invalid_seconds"
+  fi
+
+  release_lock
+  trap - EXIT INT TERM
+  exit 0
+}
+
+init_logging
+log_event "event=wrapper_start pid=$$ mode=$WRAPPER_MODE entry_id=$ENTRY_ID"
+self_check
+acquire_lock
+
+if [[ "$WRAPPER_MODE" == "check" ]]; then
+  run_check_mode
+fi
+
+log_event "event=exec_start_tui pid=$$ node=$NODE_BIN script=$TUI_SCRIPT"
+exec "$NODE_BIN" "$TUI_SCRIPT" tui \
+  --root "$WORKSPACE_ROOT" \
+  --out "$DATA_DIR" \
+  "$WRAPPER_ENTRY_ARG" "$ENTRY_ID" \
+  2>> "$LOG_FILE"
+
+exec_status=$?
+log_event "event=exec_failed status=$exec_status"
+release_lock
+exit "$exec_status"
